@@ -50,7 +50,7 @@ from pyproj.exceptions import CRSError
 from pyproj.geod import Geod
 
 
-def _from_dict(projparams):
+def _string_from_dict(projparams):
     # convert a dict to a proj4 string.
     pjargs = []
     for key, value in projparams.items():
@@ -64,10 +64,10 @@ def _from_dict(projparams):
             pass
         else:
             pjargs.append("+{key}={value}".format(key=key, value=value))
-    return _from_string(" ".join(pjargs))
+    return _preprocess_string(" ".join(pjargs))
 
 
-def _from_string(in_crs_string):
+def _preprocess_string(in_crs_string):
     if not in_crs_string:
         raise CRSError("CRS is empty or invalid: {!r}".format(in_crs_string))
     elif "{" in in_crs_string:
@@ -79,7 +79,7 @@ def _from_string(in_crs_string):
 
         if not crs_dict:
             raise CRSError("CRS is empty JSON")
-        return _from_dict(crs_dict)
+        return _string_from_dict(crs_dict)
     elif not is_wkt(in_crs_string) and "=" in in_crs_string:
         # make sure the projection starts with +proj or +init
         starting_params = ("+init", "+proj", "init", "proj")
@@ -110,12 +110,12 @@ def _from_string(in_crs_string):
     return in_crs_string
 
 
-def _from_authority(auth_name, auth_code):
+def _string_from_authority(auth_name, auth_code):
     return "{}:{}".format(auth_name, auth_code)
 
 
-def _from_epsg(auth_code):
-    return _from_authority("epsg", auth_code)
+def _string_from_epsg(auth_code):
+    return _string_from_authority("epsg", auth_code)
 
 
 class CRS(_CRS):
@@ -138,19 +138,22 @@ class CRS(_CRS):
 
     """
 
-    def __init__(self, projparams=None, **kwargs):
+    def __init__(self, proj_string):
         """
-         Initialize a CRS class instance with:
-         - PROJ string 
-         - Dictionary of PROJ parameters
-         - PROJ keyword arguments for parameters
-         - JSON string with PROJ parameters
-         - CRS WKT string
-         - An authority string [i.e. 'epsg:4326']
-         - An EPSG integer code [i.e. 4326]
-         - A tuple of ("auth_name": "auth_code") [i.e ('epsg', '4326')]
-         - An object with a `to_wkt` method.
-         - A :class:`~pyproj.CRS`
+        Initialize a CRS class instance with a string describing a CRS, including:
+
+        - An object code (e.g. "EPSG:4326")
+        - WKT string
+        - PROJ string
+        - An OGC URN code (e.g. "urn:ogc:def:crs:EPSG::4326")
+
+        Use the `from_epsg`, `from_authority`, `from_wkt`, `from_proj4`,
+        `from_dict`, `from_string` or `from_user_input` class methods to create
+        a CRS instance from various input.
+
+        Note: The use of a PROJ string to describe a CRS is discouraged. It is
+        a legacy means of conveying CRS descriptions: use of object codes
+        (EPSG:XXXX typically) or WKT description is recommended.
 
         Example usage:
 
@@ -242,22 +245,10 @@ class CRS(_CRS):
         >>> crs.is_geographic
         False
         """
-        if isinstance(projparams, string_types):
-            projstring = _from_string(projparams)
-        elif isinstance(projparams, dict):
-            projstring = _from_dict(projparams)
-        elif kwargs:
-            projstring = _from_dict(kwargs)
-        elif isinstance(projparams, int):
-            projstring = _from_epsg(projparams)
-        elif isinstance(projparams, (list, tuple)) and len(projparams) == 2:
-            projstring = _from_authority(*projparams)
-        elif hasattr(projparams, "to_wkt"):
-            projstring = projparams.to_wkt()
-        else:
-            raise CRSError("Invalid CRS input: {!r}".format(projstring))
-
-        super(CRS, self).__init__(projstring)
+        if not isinstance(proj_string, string_types):
+            raise ValueError(
+                "CRS constructor expects a string, got: {!r}".format(proj_string))
+        super(CRS, self).__init__(proj_string)
 
     @classmethod
     def from_authority(cls, auth_name, code):
@@ -274,7 +265,7 @@ class CRS(_CRS):
         -------
         CRS
         """
-        return cls(_from_authority(auth_name, code))
+        return cls(_string_from_authority(auth_name, code))
 
     @classmethod
     def from_epsg(cls, code):
@@ -289,7 +280,7 @@ class CRS(_CRS):
         -------
         CRS
         """
-        return cls(_from_epsg(code))
+        return cls(_string_from_epsg(code))
 
     @classmethod
     def from_proj4(cls, in_proj_string):
@@ -306,7 +297,7 @@ class CRS(_CRS):
         """
         if is_wkt(in_proj_string) or "=" not in in_proj_string:
             raise CRSError("Invalid PROJ string: {}".format(in_proj_string))
-        return cls(_from_string(in_proj_string))
+        return cls(_preprocess_string(in_proj_string))
 
     @classmethod
     def from_wkt(cls, in_wkt_string):
@@ -323,7 +314,7 @@ class CRS(_CRS):
         """
         if not is_wkt(in_wkt_string):
             raise CRSError("Invalid WKT string: {}".format(in_wkt_string))
-        return cls(_from_string(in_wkt_string))
+        return cls(in_wkt_string)
 
     @classmethod
     def from_string(cls, in_crs_string):
@@ -344,7 +335,7 @@ class CRS(_CRS):
         -------
         CRS
         """
-        return cls(_from_string(in_crs_string))
+        return cls(_preprocess_string(in_crs_string))
 
     def to_string(self):
         """Convert the CRS to a string.
@@ -363,7 +354,7 @@ class CRS(_CRS):
         return self.srs
 
     @classmethod
-    def from_user_input(cls, value):
+    def from_user_input(cls, value=None, **kwargs):
         """
         Initialize a CRS class instance with:
          - PROJ string 
@@ -386,9 +377,23 @@ class CRS(_CRS):
         -------
         CRS
         """
-        if isinstance(value, _CRS):
+        if isinstance(value, CRS):
             return value
-        return cls(value)
+        elif isinstance(value, string_types):
+            projstring = _preprocess_string(value)
+        elif isinstance(value, dict):
+            projstring = _string_from_dict(value)
+        elif kwargs:
+            projstring = _string_from_dict(kwargs)
+        elif isinstance(value, int):
+            projstring = _string_from_epsg(value)
+        elif isinstance(value, (list, tuple)) and len(value) == 2:
+            projstring = _string_from_authority(*value)
+        elif hasattr(value, "to_wkt"):
+            projstring = projparams.to_wkt()
+        else:
+            raise CRSError("Invalid CRS input: {!r}".format(projstring))
+        return cls(projstring)
 
     def get_geod(self):
         """
@@ -419,7 +424,7 @@ class CRS(_CRS):
         -------
         CRS
         """
-        return cls(_from_dict(proj_dict))
+        return cls(_string_from_dict(proj_dict))
 
     def to_dict(self):
         """
